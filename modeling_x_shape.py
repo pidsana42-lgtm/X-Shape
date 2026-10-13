@@ -411,10 +411,10 @@ class XShapeForCausalLM(nn.Module):
         loss = None
         if labels is not None:
             # Shift so that tokens < n predict n
-            shift_logits = logits[..., :-1, :].contiguous()
-            shift_labels = labels[..., 1:].contiguous()
+            shift_logits = logits[..., :-1, :]
+            shift_labels = labels[..., 1:]
             loss_fct = nn.CrossEntropyLoss()
-            loss = loss_fct(shift_logits.view(-1, self.config.vocab_size), shift_labels.view(-1))
+            loss = loss_fct(shift_logits.reshape(-1, self.config.vocab_size), shift_labels.reshape(-1))
 
         return {
             "loss": loss,

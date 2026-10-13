@@ -24,6 +24,7 @@ app = modal.App("thai-0.1b-x-shape-pretrain")
 
 image = (
     modal.Image.debian_slim(python_version="3.12")
+    .env({"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"})
     .pip_install(
         "torch>=2.2.0",
         "transformers>=4.40.0",
@@ -48,8 +49,8 @@ LOCAL_HF_TOKEN = get_local_hf_token()
 
 TRAIN_CONFIG = {
     "total_steps": 10000,
-    "batch_size": 8,
-    "grad_accum": 2,
+    "batch_size": 4,
+    "grad_accum": 4,
     "max_seq_len": 2048,
     "learning_rate": 3.0e-4,
     "min_learning_rate": 3.0e-5,
@@ -67,6 +68,8 @@ TRAIN_CONFIG = {
     secrets=[modal.Secret.from_dict({"HF_TOKEN": LOCAL_HF_TOKEN})] if LOCAL_HF_TOKEN else [],
 )
 def train_x_shape():
+    import os
+    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
     import sys
     import torch
     from torch.utils.data import IterableDataset, DataLoader
