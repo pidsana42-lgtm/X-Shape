@@ -137,17 +137,29 @@ def train_x_shape():
 
     # 3. Data Loading
     print("📚 Preparing 4-Way Balanced Streaming Dataset...")
-    qwen_clean = [x["text"] for x in load_dataset("Jommarn/thai-semi-pretrain-qwen", split="train_clean")]
-    qwen_think = [x["text"] for x in load_dataset("Jommarn/thai-semi-pretrain-qwen", split="train_think")]
-    print(f"✅ Qwen Clean cached: {len(qwen_clean):,} docs | Qwen Think cached: {len(qwen_think):,} docs")
+    try:
+        ds_qwen_c = load_dataset("Jommarn/thai-semi-pretrain-qwen", "pretrain_clean", split="train")
+        qwen_clean = [x["text"] for x in ds_qwen_c if len(x.get("text", "").strip()) > 30]
+        print(f"✅ Qwen Clean cached: {len(qwen_clean):,} docs")
+    except Exception as e:
+        print(f"Warning loading qwen_clean: {e}")
+        qwen_clean = []
+
+    try:
+        ds_qwen_t = load_dataset("Jommarn/thai-semi-pretrain-qwen", "pretrain_with_think", split="train")
+        qwen_think = [x["text"] for x in ds_qwen_t if len(x.get("text", "").strip()) > 30]
+        print(f"✅ Qwen Think cached: {len(qwen_think):,} docs")
+    except Exception as e:
+        print(f"Warning loading qwen_think: {e}")
+        qwen_think = []
 
     ds_wiki = load_dataset("wikimedia/wikipedia", "20231101.th", split="train", streaming=True)
     ds_fw2 = load_dataset("HuggingFaceFW/fineweb-2", "tha_Thai", split="train", streaming=True)
     ds_edu = load_dataset("HuggingFaceFW/fineweb-edu", "sample-10BT", split="train", streaming=True)
 
-    iter_wiki = iter(ds_wiki)
-    iter_fw2 = iter(ds_fw2)
-    iter_edu = iter(ds_edu)
+    iter_wiki = iter(ds_wiki.shuffle(seed=43, buffer_size=1000))
+    iter_fw2 = iter(ds_fw2.shuffle(seed=44, buffer_size=1000))
+    iter_edu = iter(ds_edu.shuffle(seed=45, buffer_size=1000))
 
     class MultiStreamPackedDataset(IterableDataset):
         def __init__(self, tokenizer, max_seq_len):
@@ -161,30 +173,30 @@ def train_x_shape():
             while True:
                 r = random.random()
                 text = None
-                if r < 0.20:
+                if r < 0.20 and qwen_clean:
                     text = random.choice(qwen_clean)
-                elif r < 0.30:
+                elif r < 0.30 and qwen_think:
                     text = random.choice(qwen_think)
                 elif r < 0.65:
                     try:
                         sample = next(iter_wiki)
                         text = sample.get("text", "")
                     except StopIteration:
-                        iter_wiki = iter(ds_wiki)
+                        iter_wiki = iter(ds_wiki.shuffle(seed=random.randint(1, 99999), buffer_size=1000))
                         text = next(iter_wiki).get("text", "")
                 elif r < 0.85:
                     try:
                         sample = next(iter_fw2)
                         text = sample.get("text", "")
                     except StopIteration:
-                        iter_fw2 = iter(ds_fw2)
+                        iter_fw2 = iter(ds_fw2.shuffle(seed=random.randint(1, 99999), buffer_size=1000))
                         text = next(iter_fw2).get("text", "")
                 else:
                     try:
                         sample = next(iter_edu)
                         text = sample.get("text", "")
                     except StopIteration:
-                        iter_edu = iter(ds_edu)
+                        iter_edu = iter(ds_edu.shuffle(seed=random.randint(1, 99999), buffer_size=1000))
                         text = next(iter_edu).get("text", "")
 
                 if not text or len(text.strip()) < 10:
