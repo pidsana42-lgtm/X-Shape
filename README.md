@@ -82,3 +82,4 @@ python3 test_x_shape_arch.py
 ```bash
 modal run --detach train_x_shape_modal.py::train_x_shape
 ```
+# X-Shape
