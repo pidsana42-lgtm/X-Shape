@@ -33,6 +33,9 @@ class XShapeConfig:
     num_key_value_heads_core: int = 2
     num_layers_core: int = 16        # Stage 2: Layers 4..19 (16 deep layers!)
     
+    # Attention Architecture (Interleaved Local-Global)
+    sliding_window: int = 512        # Gemma 2 / Mistral style sliding window for even layers in Stage 2
+
     # Normalization & Regularization
     rms_norm_eps: float = 1e-5
     rope_theta: float = 10000.0

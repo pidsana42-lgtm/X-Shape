@@ -80,6 +80,7 @@ class XAttention(nn.Module):
         num_key_value_heads: int,
         rope_dim: int,
         attention_dropout: float = 0.0,
+        sliding_window: Optional[int] = None,
     ):
         super().__init__()
         self.hidden_size = hidden_size
@@ -89,6 +90,7 @@ class XAttention(nn.Module):
         self.head_dim = hidden_size // num_attention_heads
         self.rope_dim = rope_dim
         self.dropout = attention_dropout
+        self.sliding_window = sliding_window
 
         self.q_proj = nn.Linear(hidden_size, self.num_heads * self.head_dim, bias=False)
         self.k_proj = nn.Linear(hidden_size, self.num_kv_heads * self.head_dim, bias=False)
@@ -116,6 +118,9 @@ class XAttention(nn.Module):
             past_k, past_v = past_key_value
             k = torch.cat([past_k, k], dim=2)
             v = torch.cat([past_v, v], dim=2)
+            if self.sliding_window is not None and k.shape[2] > self.sliding_window:
+                k = k[:, :, -self.sliding_window:, :]
+                v = v[:, :, -self.sliding_window:, :]
         current_kv = (k, v)
 
         k = repeat_kv(k, self.num_key_value_groups)
@@ -123,6 +128,14 @@ class XAttention(nn.Module):
 
         # Native PyTorch SDPA (auto-selects FlashAttention-2 or memory-efficient kernel)
         is_causal = attention_mask is None and q_len > 1
+        if self.sliding_window is not None and q_len > 1 and attention_mask is None:
+            # Construct sliding window causal mask (Gemma 2 style local attention)
+            row = torch.arange(q_len, device=hidden_states.device).unsqueeze(1)
+            col = torch.arange(q_len, device=hidden_states.device).unsqueeze(0)
+            sw_mask = (col <= row) & (row - col < self.sliding_window)
+            attention_mask = sw_mask.unsqueeze(0).unsqueeze(0)
+            is_causal = False
+
         output = F.scaled_dot_product_attention(
             q, k, v,
             attn_mask=attention_mask if not is_causal else None,
@@ -157,6 +170,7 @@ class XDecoderLayer(nn.Module):
         rope_dim: int,
         rms_norm_eps: float = 1e-5,
         dropout: float = 0.0,
+        sliding_window: Optional[int] = None,
     ):
         super().__init__()
         self.self_attn = XAttention(
@@ -165,6 +179,7 @@ class XDecoderLayer(nn.Module):
             num_key_value_heads=num_kv_heads,
             rope_dim=rope_dim,
             attention_dropout=dropout,
+            sliding_window=sliding_window,
         )
         self.mlp = XMLP(hidden_size=hidden_size, intermediate_size=intermediate_size)
         self.input_layernorm = RMSNorm(hidden_size, eps=rms_norm_eps)
@@ -235,6 +250,9 @@ class XShapeModel(nn.Module):
 
         # -------------------------------------------------------------
         # Stage 2: Deep Core Bottleneck (16 layers @ hidden 480)
+        # Interleaved Local-Global Attention (Gemma 2 style):
+        # Even layers: Local Attention (Sliding Window = 512)
+        # Odd layers:  Full Global Attention
         # -------------------------------------------------------------
         self.stage2_layers = nn.ModuleList([
             XDecoderLayer(
@@ -245,8 +263,9 @@ class XShapeModel(nn.Module):
                 rope_dim=head_dim_core,
                 rms_norm_eps=config.rms_norm_eps,
                 dropout=config.attention_dropout_prob,
+                sliding_window=config.sliding_window if (i % 2 == 0) else None,
             )
-            for _ in range(config.num_layers_core)
+            for i in range(config.num_layers_core)
         ])
 
         # -------------------------------------------------------------
