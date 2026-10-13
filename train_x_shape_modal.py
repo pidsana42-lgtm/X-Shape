@@ -97,17 +97,46 @@ def train_x_shape():
         tokenizer.pad_token_id = tokenizer.eos_token_id
     eos_id = tokenizer.eos_token_id
 
-    # 2. Build Model
+    # 2. Build Model & Auto-Resume
     config = XShapeConfig()
     model = XShapeForCausalLM(config)
+    start_step = 0
+
+    if os.path.exists("/root/checkpoints_x_shape"):
+        saved_steps = []
+        for d in os.listdir("/root/checkpoints_x_shape"):
+            if d.startswith("step_"):
+                try:
+                    s = int(d.split("_")[1])
+                    p = f"/root/checkpoints_x_shape/{d}/model_checkpoint.pt"
+                    if os.path.exists(p):
+                        saved_steps.append((s, p))
+                except Exception:
+                    pass
+        if saved_steps:
+            saved_steps.sort(key=lambda x: x[0], reverse=True)
+            latest_step, latest_ckpt = saved_steps[0]
+            print(f"🔄 Found existing checkpoint at Step {latest_step}! Resuming from {latest_ckpt}...")
+            ckpt_data = torch.load(latest_ckpt, map_location="cpu", weights_only=False)
+            model.load_state_dict(ckpt_data["model_state_dict"])
+            start_step = latest_step
+            print(f"✅ Successfully resumed weights from Step {start_step}!")
+
     model.to(device)
     total_params = sum(p.numel() for p in model.parameters())
     print(f"🧠 Model Architecture: X-Shape 24-Layer Transformer")
     print(f"   Total Parameters: {total_params:,} ({total_params/1e6:.2f}M)")
 
+    # Upload tokenizer to HF repo once at start
+    if hf_token and start_step == 0:
+        try:
+            tokenizer.push_to_hub(TRAIN_CONFIG["hf_repo_id"])
+            print(f"📦 Pushed Tokenizer to https://huggingface.co/{TRAIN_CONFIG['hf_repo_id']}")
+        except Exception as e:
+            print(f"Notice pushing tokenizer: {e}")
+
     # 3. Data Loading
     print("📚 Preparing 4-Way Balanced Streaming Dataset...")
-    # Preload static Qwen dataset into RAM
     qwen_clean = [x["text"] for x in load_dataset("Jommarn/thai-semi-pretrain-qwen", split="train_clean")]
     qwen_think = [x["text"] for x in load_dataset("Jommarn/thai-semi-pretrain-qwen", split="train_think")]
     print(f"✅ Qwen Clean cached: {len(qwen_clean):,} docs | Qwen Think cached: {len(qwen_think):,} docs")
@@ -192,13 +221,22 @@ def train_x_shape():
     # 5. Training Loop
     total_steps = TRAIN_CONFIG["total_steps"]
     grad_accum = TRAIN_CONFIG["grad_accum"]
-    print(f"🔥 Starting Training for {total_steps:,} Steps with bfloat16 mixed precision...")
+    print(f"🔥 Starting Training from Step {start_step + 1} to {total_steps:,} Steps with bfloat16 mixed precision...")
 
     model.train()
     start_time = time.time()
     tokens_per_step = TRAIN_CONFIG["batch_size"] * grad_accum * TRAIN_CONFIG["max_seq_len"]
 
-    for step in range(1, total_steps + 1):
+    eval_prompts = [
+        "กรุงเทพมหานคร เป็นเมืองหลวงของประเทศไทย โดยมี",
+        "ดวงอาทิตย์ ขึ้นทางทิศ",
+        "วันสงกรานต์ ตรงกับเดือน",
+        "ประเทศไทย มีเมืองหลวงชื่อว่า",
+        "ปัญญาประดิษฐ์ หรือ AI คือ",
+        "<|im_start|>user\nสวัสดีครับ คุณคือใคร<|im_end|>\n<|im_start|>assistant\n",
+    ]
+
+    for step in range(start_step + 1, total_steps + 1):
         lr = get_lr(step)
         for pg in optimizer.param_groups:
             pg["lr"] = lr
@@ -219,15 +257,35 @@ def train_x_shape():
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimizer.step()
 
-        if step % 5 == 0 or step == 1:
+        if step % 5 == 0 or step == start_step + 1:
             elapsed = time.time() - start_time
-            tok_speed = (tokens_per_step * 5) / max(elapsed, 1e-4) if step > 1 else tokens_per_step / max(elapsed, 1e-4)
+            tok_speed = (tokens_per_step * 5) / max(elapsed, 1e-4) if step > start_step + 1 else tokens_per_step / max(elapsed, 1e-4)
             start_time = time.time()
             vram_gb = torch.cuda.max_memory_allocated(device) / 1024**3
             print(f"🔥 Step {step:5d}/{total_steps} | Loss: {accum_loss:6.4f} | LR: {lr:.2e} | VRAM: {vram_gb:.2f}GB / 24GB | Speed: {tok_speed:,.0f} tok/s")
 
-        # Save & Eval
+        # Save & Live Generation Evaluation
         if step % TRAIN_CONFIG["save_every"] == 0 or step == total_steps:
+            model.eval()
+            print("\n" + "=" * 60)
+            print(f"🧪 [EVALUATION AT STEP {step}] Live Text Generation:")
+            print("=" * 60)
+            for ep in eval_prompts:
+                inp = tokenizer.encode(ep, return_tensors="pt").to(device)
+                curr = inp.clone()
+                with torch.no_grad():
+                    for _ in range(25):
+                        out_ev = model(curr)
+                        nxt = out_ev["logits"][:, -1, :].argmax(dim=-1, keepdim=True)
+                        curr = torch.cat([curr, nxt], dim=-1)
+                        if nxt.item() == eos_id:
+                            break
+                gen_text = tokenizer.decode(curr[0].tolist(), skip_special_tokens=False)[len(ep):]
+                print(f"[Prompt]: \"{ep.strip()}\"")
+                print(f"[Generated]: '{gen_text.strip()}'")
+                print("-" * 50)
+            model.train()
+
             save_dir = f"/root/checkpoints_x_shape/step_{step}"
             os.makedirs(save_dir, exist_ok=True)
             save_path = os.path.join(save_dir, "model_checkpoint.pt")
