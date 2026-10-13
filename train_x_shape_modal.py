@@ -184,23 +184,32 @@ def train_x_shape():
                     try:
                         sample = next(iter_wiki)
                         text = sample.get("text", "")
-                    except StopIteration:
-                        iter_wiki = iter(ds_wiki.shuffle(seed=random.randint(1, 99999), buffer_size=1000))
-                        text = next(iter_wiki).get("text", "")
+                    except Exception:
+                        try:
+                            iter_wiki = iter(ds_wiki.shuffle(seed=random.randint(1, 99999), buffer_size=1000))
+                            text = next(iter_wiki).get("text", "")
+                        except Exception:
+                            text = random.choice(qwen_clean) if qwen_clean else ""
                 elif r < 0.85:
                     try:
                         sample = next(iter_fw2)
                         text = sample.get("text", "")
-                    except StopIteration:
-                        iter_fw2 = iter(ds_fw2.shuffle(seed=random.randint(1, 99999), buffer_size=1000))
-                        text = next(iter_fw2).get("text", "")
+                    except Exception:
+                        try:
+                            iter_fw2 = iter(ds_fw2.shuffle(seed=random.randint(1, 99999), buffer_size=1000))
+                            text = next(iter_fw2).get("text", "")
+                        except Exception:
+                            text = random.choice(qwen_clean) if qwen_clean else ""
                 else:
                     try:
                         sample = next(iter_edu)
                         text = sample.get("text", "")
-                    except StopIteration:
-                        iter_edu = iter(ds_edu.shuffle(seed=random.randint(1, 99999), buffer_size=1000))
-                        text = next(iter_edu).get("text", "")
+                    except Exception:
+                        try:
+                            iter_edu = iter(ds_edu.shuffle(seed=random.randint(1, 99999), buffer_size=1000))
+                            text = next(iter_edu).get("text", "")
+                        except Exception:
+                            text = random.choice(qwen_clean) if qwen_clean else ""
 
                 if not text or len(text.strip()) < 10:
                     continue
