@@ -1,0 +1,18 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# PyTorch checkpoints and weights (keep repo clean)
+*.pt
+*.bin
+*.safetensors
+checkpoints/
+checkpoints_x_shape/
+
+# macOS
+.DS_Store
+
+# Virtual environment
+venv/
+.env/
